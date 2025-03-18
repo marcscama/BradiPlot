@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BRADIPLOT - Grafico interattivo Plotly per dati CSV Gossip</title>
+  <!-- Aggiornato a Plotly versione 3 -->
+  <script src="https://cdn.plot.ly/plotly-3.0.1.min.js" charset="utf-8"></script>
+  <!-- Aggiornato a PapaParse versione 5.3.2 -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      background-color: #eaeaea;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    #title {
+      font-size: 24px;
+      margin: 20px;
+    }
+    /* Contenitore principale della UI con controlli e statistiche */
+    #ui-container {
+      width: 80%;
+      margin: 20px auto;
+      padding: 20px;
+      background: #fff;
+      border-radius: 15px;
+      box-shadow: 0px 0px 10px rgba(0, 0, 0, 0.1);
+    }
+    #controls {
+      margin: 20px 0;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 10px;
+    }
+    /* Sezione degli slider */
+    .sliderContainer {
+      margin-bottom: 20px;
+    }
+    .sliderGroup {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .slider-label {
+      font-size: 16px;
+      margin-top: 10px;
+      text-align: center;
+    }
+    /* Sezione statistiche */
+    #info {
+      margin: 20px 0;
+      font-size: 18px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    /* Grafico Plotly */
+    #chart {
+      width: 80%;
+      height: 800px;
+      margin-bottom: 40px;
+    }
+  </style>
+</head>
+<body>
+  <div id="title">Carica il tuo file CSV dei terremoti GOSSIP</div>
+  
+  <div id="ui-container">
+    <div id="controls">
+      <input type="file" id="fileInput" accept=".csv">
+      <label for="xSelect">Asse X:</label>
+      <select id="xSelect"></select>
+      <label for="ySelect">Asse Y:</label>
+      <select id="ySelect"></select>
+    </div>
+
+    <div class="sliderContainer">
+      <div class="sliderGroup">
+        <label for="mdRangeMin">MD Min:</label>
+        <input type="range" id="mdRangeMin" min="1" max="5" step="0.1" value="1">
+        <label for="mdRangeMax">MD Max:</label>
+        <input type="range" id="mdRangeMax" min="1" max="5" step="0.1" value="5">
+      </div>
+      <p id="mdRangeLabel" class="slider-label">MD: 1 - 5</p>
+    </div>
+
+    <div class="sliderContainer">
+      <div class="sliderGroup">
+        <label for="depthRangeMin">Depth Min (km):</label>
+        <input type="range" id="depthRangeMin" min="0" max="10" step="0.1" value="0">
+        <label for="depthRangeMax">Depth Max (km):</label>
+        <input type="range" id="depthRangeMax" min="0" max="10" step="0.1" value="10">
+      </div>
+      <p id="depthRangeLabel" class="slider-label">Depth km: 0 - 10</p>
+    </div>
+
+    <div id="info">
+      <p id="totalPoints">Totale terremoti filtrati: 0</p>
+      <p id="md1">MD >= 1 e < 2: 0</p>
+      <p id="md2">MD >= 2 e < 3: 0</p>
+      <p id="md3">MD >= 3 e < 4: 0</p>
+      <p id="md4">MD >= 4 e <= 5: 0</p>
+    </div>
+  </div>
+
+  <div id="chart"></div>
+
+  <script>
+    let originalData = [];
+    let filteredData = [];
+
+    // Carica il file CSV e processa i dati
+    document.getElementById('fileInput').addEventListener('change', function(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+      Papa.parse(file, {
+        header: true,
+        dynamicTyping: true,
+        complete: function(results) {
+          originalData = results.data;
+          // Filtro iniziale per MD maggiore o uguale a 1
+          filteredData = originalData.filter(row => row.MD >= 1);
+          filteredData = filteredData.map(row => {
+            row.Time = normalizeTime(row.Time);
+            row.Depth = parseFloat(row.Depth);
+            return row;
+          });
+          updateStatistics(filteredData);
+          populateSelectBoxes(results.meta.fields);
+          updateChart();
+        }
+      });
+    });
+
+    // Popola le select con le intestazioni del CSV
+    function populateSelectBoxes(headers) {
+      const xSelect = document.getElementById('xSelect');
+      const ySelect = document.getElementById('ySelect');
+      xSelect.innerHTML = '';
+      ySelect.innerHTML = '';
+
+      headers.forEach(header => {
+        const optionX = document.createElement('option');
+        optionX.value = header;
+        optionX.text = header;
+        xSelect.appendChild(optionX);
+
+        const optionY = document.createElement('option');
+        optionY.value = header;
+        optionY.text = header;
+        ySelect.appendChild(optionY);
+      });
+
+      xSelect.addEventListener('change', updateChart);
+      ySelect.addEventListener('change', updateChart);
+    }
+
+    // Aggiungi event listener agli slider per aggiornare il grafico al variare dei valori
+    document.getElementById('mdRangeMin').addEventListener('input', updateChart);
+    document.getElementById('mdRangeMax').addEventListener('input', updateChart);
+    document.getElementById('depthRangeMin').addEventListener('input', updateChart);
+    document.getElementById('depthRangeMax').addEventListener('input', updateChart);
+
+    // Funzione per aggiornare il grafico e le statistiche
+    function updateChart() {
+      const xSelectValue = document.getElementById('xSelect').value;
+      const ySelectValue = document.getElementById('ySelect').value;
+      const mdMin = parseFloat(document.getElementById('mdRangeMin').value);
+      const mdMax = parseFloat(document.getElementById('mdRangeMax').value);
+      const depthMin = parseFloat(document.getElementById('depthRangeMin').value);
+      const depthMax = parseFloat(document.getElementById('depthRangeMax').value);
+
+      if (!xSelectValue || !ySelectValue) {
+        console.error('Seleziona entrambe le colonne X e Y.');
+        return;
+      }
+
+      // Aggiorna le etichette degli slider
+      document.getElementById('mdRangeLabel').innerText = `MD: ${mdMin} - ${mdMax}`;
+      document.getElementById('depthRangeLabel').innerText = `Depth km: ${depthMin} - ${depthMax}`;
+
+      // Filtra i dati in base ai valori degli slider
+      filteredData = originalData.filter(row => 
+        row.MD >= mdMin && row.MD <= mdMax &&
+        row.Depth >= depthMin && row.Depth <= depthMax
+      );
+      filteredData = filteredData.map(row => {
+        row.Time = normalizeTime(row.Time);
+        return row;
+      });
+
+      updateStatistics(filteredData);
+      createChart(filteredData, xSelectValue, ySelectValue);
+    }
+
+    // Crea il grafico Plotly con i dati filtrati
+    function createChart(data, xColumn, yColumn) {
+      // Mappa i dati e, se l'asse è "Depth", trasforma i valori in negativi
+      const parsedData = data.map(row => {
+        let xVal = row[xColumn];
+        let yVal = row[yColumn];
+        if(xColumn === "Depth") {
+          xVal = -Math.abs(row.Depth);
+        }
+        if(yColumn === "Depth") {
+          yVal = -Math.abs(row.Depth);
+        }
+        return {
+          x: xVal,
+          y: yVal,
+          time: new Date(row.Time).toLocaleString('it-IT', {
+            day: '2-digit', month: '2-digit', year: '2-digit',
+            hour: '2-digit', minute: '2-digit', second: '2-digit'
+          }),
+          md: row.MD,
+          depth: row.Depth,
+          size: Math.pow(row.MD || 1, 2.5),
+          color: row.MD
+        };
+      });
+
+      // Se "MD" è selezionato in uno degli assi, ordina in ordine crescente per disegnare per ultimi i valori più alti
+      if(xColumn === "MD" || yColumn === "MD") {
+        parsedData.sort((a, b) => a.md - b.md);
+      } else {
+        // Altrimenti, ordina per dare una priorità visiva (i più alti in fondo)
+        parsedData.sort((a, b) => b.md - a.md);
+      }
+
+      const trace = {
+        name: "",  // Rimuove il nome del trace ("trace 0")
+        x: parsedData.map(d => d.x),
+        y: parsedData.map(d => d.y),
+        mode: 'markers',
+        marker: {
+          symbol: 'circle-open',
+          size: parsedData.map(d => d.size),
+          color: parsedData.map(d => d.color),
+          colorscale: 'Rainbow',
+          showscale: true,
+          colorbar: {
+            title: { text: 'MD' },
+            thickness: 20,
+            len: 0.75,
+            x: 1.1,
+            y: 0.5
+          },
+          line: {
+            width: 2,
+            color: 'rgba(0,0,0,0.5)'
+          }
+        },
+        text: parsedData.map(d => `Time: ${d.time}<br>MD: ${d.md}<br>Depth: ${d.depth} km`),
+        hoverinfo: 'text',   // Mostra solo il testo del tooltip
+        hovertemplate: '<b>%{text}</b>'
+      };
+
+      const layout = {
+        margin: { l: 80, r: 100, t: 80, b: 80 },
+        height: 850,
+        dragmode: 'pan',
+        hovermode: 'closest',
+        xaxis: {
+          title: { text: xColumn },
+          type: (xColumn === 'Time') ? 'date' : 'linear',
+          tickformat: (xColumn === 'Time') ? '%d/%m/%Y %H:%M:%S' : '',
+          rangeslider: { visible: true, thickness: 0.2, borderwidth: 1 }
+        },
+        yaxis: { 
+          title: { text: yColumn },
+          type: (yColumn === 'Time') ? 'date' : 'linear'
+        },
+        showlegend: false
+      };
+
+      Plotly.newPlot('chart', [trace], layout);
+    }
+
+    // Funzione per normalizzare il formato dell'orario rimuovendo le frazioni di secondo
+    function normalizeTime(time) {
+      return time ? time.split('.')[0] : '';
+    }
+
+    // Aggiorna le statistiche relative ai dati filtrati
+    function updateStatistics(data) {
+      const totalPoints = data.length;
+      const md1 = data.filter(d => d.MD >= 1 && d.MD < 2).length;
+      const md2 = data.filter(d => d.MD >= 2 && d.MD < 3).length;
+      const md3 = data.filter(d => d.MD >= 3 && d.MD < 4).length;
+      const md4 = data.filter(d => d.MD >= 4 && d.MD <= 5).length;
+
+      document.getElementById('totalPoints').textContent = `Totale terremoti filtrati: ${totalPoints}`;
+      document.getElementById('md1').textContent = `MD >= 1 e < 2: ${md1}`;
+      document.getElementById('md2').textContent = `MD >= 2 e < 3: ${md2}`;
+      document.getElementById('md3').textContent = `MD >= 3 e < 4: ${md3}`;
+      document.getElementById('md4').textContent = `MD >= 4 e <= 5: ${md4}`;
+    }
+  </script>
+</body>
+</html>
+
